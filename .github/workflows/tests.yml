@@ -1,0 +1,21 @@
+name: Tests
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pyqt5 python3-pil libqt5svg5 poppler-utils
+      - name: Check syntax
+        run: python3 -m compileall -q simple.py model.py crop.py scanner_setup.py preferences.py theme.py ui.py
+      - name: Test without scanner hardware
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python3 -m unittest test_audit test_scanner_setup test_preferences -v

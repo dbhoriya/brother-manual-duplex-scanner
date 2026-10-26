@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+<title id="title">BS — Brother Duplex Scanner</title><desc id="desc">A page marked BS with a folded corner and a curved flipping arrow.</desc>
+<rect x="3" y="3" width="122" height="122" rx="25" fill="#284969"/>
+<path d="M29 24h49l19 20v63H29z" fill="#182f46" opacity=".45"/>
+<path d="M25 19h48l21 21v63H25z" fill="#f9f8f3"/>
+<path d="M73 19v21h21" fill="#c7d5e1"/>
+<text x="35" y="75" fill="#284969" font-family="DejaVu Sans,Arial,sans-serif" font-size="32" font-weight="700" letter-spacing="-2">BS</text>
+<path d="M37 86h33" stroke="#a5b7c7" stroke-width="3" stroke-linecap="round"/>
+<path d="M85 98c22-11 28-34 17-51" fill="none" stroke="#8cbbe3" stroke-width="7" stroke-linecap="round"/>
+<path d="m91 50 9-10 12 7" fill="none" stroke="#8cbbe3" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
