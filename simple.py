@@ -36,6 +36,8 @@ from PyQt5.QtWidgets import (
     QSizePolicy,
     QShortcut,
     QStackedWidget,
+    QMenu,
+    QInputDialog,
 )
 from model import Project, HOME, render, scan_file_complete
 from crop import CropDialog
@@ -57,7 +59,7 @@ GUIDE = """<h1>Just scan the stack.</h1>
 <h2>One-sided for all pages</h2><p>Load the whole stack in the feeder. Choose <b>One-sided</b> and press <b>Scan all pages</b>. It stops when the feeder is empty. Review the gallery and save your PDF.</p>
 <h2>Two-sided for all pages</h2><p>Choose <b>Two-sided</b> and <b>Scan all fronts</b>. When it finishes, flip the stack and load the back of the <b>last sheet first</b>. Press <b>Scan all backs</b>. The Combined PDF gallery puts the pages in reading order automatically.</p>
 <p>Keep blank backs in the stack. Preview the first and last pairs before saving. Clicking a thumbnail only previews it; scanning always processes the entire loaded stack.</p>
-<h2>Stopped halfway?</h2><p>Completed pages are saved. Leave scanned sheets out of the feeder and load the remaining sheets, without changing their order. Press <b>Continue</b>. For a partial back pass, the main instruction tells you how many backs remain. If you are unsure of the order, <b>Scan backs again</b> restarts the whole back pass while retaining all original files.</p>
+<h2>Change either pass</h2><p><b>Scan options</b> lets you continue either side or redo all fronts or backs at any time. Redo keeps the opposite side and original files. Load the same stack, then press Scan. Fronts fill missing positions first; additional fronts append. Backs fill missing positions in reverse order. If the counts differ, finish the missing side before saving.</p><p>In Fronts or Backs, select one page and choose <b>Move to…</b>, for example position 2 to 4. Only that side moves. Check Combined PDF afterward; Undo restores the order.</p><h2>Stopped halfway?</h2><p>Completed pages are saved. Leave scanned sheets out of the feeder and load the remaining sheets, without changing their order. Press <b>Continue</b>. For a partial back pass, the main instruction tells you how many backs remain. If you are unsure of the order, <b>Scan backs again</b> restarts the whole back pass while retaining all original files.</p>
 <h2>Only put half the fronts in?</h2><p>Before scanning any backs, use <b>Add more fronts</b> to scan the rest. The app counts them for you. If you use the glass, scan each side in order and press <b>Fronts finished</b> when ready to flip.</p>
 <h2>Speed and quality</h2><p><b>Fastest</b>: 100 DPI (default). <b>Balanced</b>: 150 DPI. <b>High detail</b>: 300 DPI. <b>Maximum detail</b>: 600 DPI. Leave Color unchecked for grayscale and less data, or enable it at any speed. Higher DPI captures fine print but cannot remove scanner warmup and carriage delays.</p><p><b>PDF quality</b> independently controls compression: Small file, Balanced, or Best quality. It does not change scan speed or resolution. Original scans remain unchanged.</p>
 <h2>Resume later</h2><p>Closing ends the workspace; the next launch starts empty. Projects remain saved on disk. Use Open saved to resume one. Clear separation of Fronts, Backs, and Combined PDF lets you inspect originals and their final order. Originals are never overwritten by redoing a pass or rotating a preview.</p>"""
@@ -195,6 +197,22 @@ class SimpleWindow(QMainWindow):
         actions.addWidget(self.main_btn)
         self.secondary = button("Add more fronts", self.secondary_action)
         actions.addWidget(self.secondary)
+        self.pass_btn = button("Scan options ▾", lambda: None)
+        menu = QMenu(self.pass_btn)
+        for title, side, restart in [
+            ("Continue / add fronts", "front", False),
+            ("Continue backs", "back", False),
+            ("Redo all fronts…", "front", True),
+            ("Redo all backs…", "back", True),
+        ]:
+            action = menu.addAction(title)
+            action.triggered.connect(
+                lambda checked=False, side=side, restart=restart: self.select_pass(
+                    side, restart
+                )
+            )
+        self.pass_btn.setMenu(menu)
+        actions.addWidget(self.pass_btn)
         self.stop_btn = button("Stop scanning", self.stop)
         self.stop_btn.setObjectName("danger")
         actions.addWidget(self.stop_btn)
@@ -240,10 +258,11 @@ class SimpleWindow(QMainWindow):
         self.delete_btn = button("Delete selected", self.delete_selected)
         self.clear_btn = button("Clear all", self.clear_all)
         self.undo_btn = button("Undo", self.undo_delete)
+        self.move_btn = button("Move to…", self.move_selected)
         decorate(self.delete_btn, "trash")
         decorate(self.clear_btn, "trash")
         decorate(self.undo_btn, "undo")
-        for b in [self.delete_btn, self.clear_btn, self.undo_btn]:
+        for b in [self.delete_btn, self.clear_btn, self.undo_btn, self.move_btn]:
             editbar.addWidget(b)
         editbar.addStretch()
         g.addLayout(editbar)
@@ -472,6 +491,7 @@ class SimpleWindow(QMainWindow):
             self.name,
             self.main_btn,
             self.secondary,
+            self.pass_btn,
         ]:
             w.setEnabled(not self.busy)
         self.stop_btn.setVisible(self.scanning)
@@ -526,7 +546,7 @@ class SimpleWindow(QMainWindow):
             self.secondary.setText(
                 "Scan backs again" if duplex else "Add another stack"
             )
-        if extras:
+        if extras and phase != "fronts":
             self.step.setText("The two passes have different counts")
             self.instruction.setText(
                 f"{fronts} fronts and {backs+len(extras)} backs were captured. Originals are safe. Reload ALL backs and scan the back pass again."
@@ -553,6 +573,14 @@ class SimpleWindow(QMainWindow):
         )
         if phase == "ready" and not complete:
             self.main_btn.setEnabled(False)
+            if self.project.missing("front") or (
+                duplex and self.project.missing("back")
+            ):
+                self.step.setText("Finish the missing pages")
+                self.instruction.setText(
+                    "Use Scan options → Continue / add fronts or Continue backs. "
+                    "Load only the remaining sheets, in the original pass order."
+                )
             if not visible:
                 self.step.setText("No pages to save")
                 self.instruction.setText(
@@ -582,11 +610,12 @@ class SimpleWindow(QMainWindow):
             tuple(item.data(Qt.UserRole)[0]) for item in self.gallery.selectedItems()
         }
         self.gallery.blockSignals(True)
-        self.gallery.clear()
+        previous_entries = self.entries
         self.entries = []
         tab = self.tabs.currentIndex()
         duplex = self.project.data["duplex"]
         pdf_number = 0
+        side_number = 0
         for i, sheet in enumerate(self.project.data["sheets"]):
             for side in ["front", "back"] if duplex else ["front"]:
                 page = sheet[side]
@@ -599,11 +628,23 @@ class SimpleWindow(QMainWindow):
                     continue
                 number = pdf_number
                 caption = f"Page {number}  ·  {side}" if duplex else f"Page {number}"
+                if tab:
+                    side_number += 1
+                    caption = f"{side.title()} {side_number} · Sheet {i + 1}"
                 self.entries.append(((i, side), page, caption))
         if tab == 2:
             for j, page in enumerate(self.project.data["extra_backs"]):
                 self.entries.append((("extra", j), page, "Unpaired back"))
-        for key, page, caption in self.entries:
+        append_only = (
+            self.scanning
+            and bool(previous_entries)
+            and self.entries[: len(previous_entries)] == previous_entries
+            and self.gallery.count() == len(previous_entries)
+        )
+        if not append_only:
+            self.gallery.clear()
+        start = len(previous_entries) if append_only else 0
+        for key, page, caption in self.entries[start:]:
             item = QListWidgetItem(caption + ("" if page else "\nWaiting for back"))
             item.setData(Qt.UserRole, (key, page, caption))
             item.setSizeHint(
@@ -634,6 +675,8 @@ class SimpleWindow(QMainWindow):
                         ico = QIcon()
                         ico.addPixmap(pix, QIcon.Normal)
                         ico.addPixmap(pix, QIcon.Selected)
+                        if len(self.cache) >= 512:
+                            self.cache.pop(next(iter(self.cache)))
                         self.cache[cache_key] = ico
                     item.setIcon(self.cache[cache_key])
                 except Exception:
@@ -720,9 +763,92 @@ class SimpleWindow(QMainWindow):
             QItemSelectionModel.ClearAndSelect,
         )
 
+    def move_selected(self):
+        if self.busy or self.tabs.currentIndex() not in (1, 2):
+            return
+        selected = self.gallery.selectedItems()
+        if len(selected) != 1:
+            return
+        key = selected[0].data(Qt.UserRole)[0]
+        if key[0] == "extra":
+            self.message("Redo the back pass to resolve unpaired backs first.")
+            return
+        side = key[1]
+        slots = [
+            i
+            for i, sheet in enumerate(self.project.data["sheets"])
+            if sheet[side] and not sheet[side].get("excluded")
+        ]
+        origin = slots.index(key[0])
+        dest, ok = QInputDialog.getInt(
+            self,
+            "Move page",
+            f"Move {side} {origin + 1} to position (other side stays fixed):",
+            origin + 1,
+            1,
+            len(slots),
+        )
+        if not ok or dest - 1 == origin:
+            return
+        self.checkpoint_delete()
+        pages = [self.project.data["sheets"][i][side] for i in slots]
+        pages.insert(dest - 1, pages.pop(origin))
+        for i, page in zip(slots, pages):
+            self.project.data["sheets"][i][side] = page
+        self.project.save()
+        self.refresh()
+        self.gallery.setCurrentRow(dest - 1)
+        self.status.setText(
+            "Page moved. Check Combined PDF to verify the pairs. Undo restores the order."
+        )
+
+    def select_pass(self, side, restart=False):
+        if self.busy:
+            return
+        if side == "back" and not self.project.data["duplex"]:
+            self.message("Choose Two-sided first.")
+            return
+        if side == "back" and not self.project.data["sheets"]:
+            self.message("Scan the fronts first so backs can be paired.")
+            return
+        if restart:
+            order = "first sheet first" if side == "front" else "last sheet first"
+            if (
+                QMessageBox.question(
+                    self,
+                    f"Redo all {side}s?",
+                    f"Reload ALL {side}s, {order}. The other side stays in place. "
+                    "Original files remain saved. Use the same stack; check pairs before saving.",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No,
+                )
+                != QMessageBox.Yes
+            ):
+                return
+            self.checkpoint_delete()
+            self.project.checkpoint()
+            for sheet in self.project.data["sheets"]:
+                sheet[side] = None
+            if side == "back":
+                self.project.data["extra_backs"] = []
+        elif side == "back" and not self.project.missing("back"):
+            self.message(
+                "All backs are already scanned. Choose Redo all backs to replace them."
+            )
+            return
+        self.project.data["phase"] = side + "s"
+        self.project.save()
+        self.refresh()
+        self.tabs.setCurrentIndex(1 if side == "front" else 2)
+
     def update_edit_buttons(self):
         if not hasattr(self, "delete_btn"):
             return
+        self.move_btn.setEnabled(
+            not self.busy
+            and self.tabs.currentIndex() in (1, 2)
+            and len(self.gallery.selectedItems()) == 1
+        )
         self.delete_btn.setEnabled(
             not self.busy
             and any(item.data(Qt.UserRole)[1] for item in self.gallery.selectedItems())
@@ -936,7 +1062,11 @@ class SimpleWindow(QMainWindow):
     def main_action(self):
         if self.busy:
             return
-        if self.project.data["duplex"] and self.project.data["extra_backs"]:
+        if (
+            self.project.data["duplex"]
+            and self.project.data["extra_backs"]
+            and self.project.data["phase"] != "fronts"
+        ):
             self.restart_backs()
             return
         if self.project.data["phase"] == "ready":
@@ -1012,7 +1142,11 @@ class SimpleWindow(QMainWindow):
             return
         side = "back" if self.project.data["phase"] == "backs" else "front"
         sheets = self.project.data["sheets"]
-        targets = list(reversed(self.project.missing("back"))) if side == "back" else []
+        targets = (
+            list(reversed(self.project.missing("back")))
+            if side == "back"
+            else self.project.missing("front")
+        )
         if side == "back" and not targets:
             self.project.data["phase"] = "ready"
             self.project.save()
@@ -1069,6 +1203,7 @@ class SimpleWindow(QMainWindow):
 
     def read_log(self):
         self.logs.extend(bytes(self.proc.readAllStandardError()))
+        del self.logs[:-1048576]
 
     def collect(self):
         if not self.scanning:
@@ -1085,7 +1220,12 @@ class SimpleWindow(QMainWindow):
                 continue
             page = {"path": str(path), "dpi": self.run["dpi"], "rotation": 0}
             if self.run["side"] == "front":
-                i = self.run["start"] + index
+                targets = self.run["targets"]
+                i = (
+                    targets[index]
+                    if index < len(targets)
+                    else self.run["start"] + index - len(targets)
+                )
                 while len(self.project.data["sheets"]) <= i:
                     self.project.data["sheets"].append({"front": None, "back": None})
                 self.project.data["sheets"][i]["front"] = page
@@ -1094,9 +1234,9 @@ class SimpleWindow(QMainWindow):
             else:
                 self.project.data["extra_backs"].append(page)
             self.seen.add(path.name)
-            self.project.save()
             changed = True
         if changed:
+            self.project.save()
             self.refresh()
         self.status.setText(
             f"{len(self.seen)} pages captured this pass · {time.monotonic()-self.started:.0f}s · Saved automatically"
@@ -1115,6 +1255,16 @@ class SimpleWindow(QMainWindow):
         self.scanning = False
         self.busy = False
         (self.job / "scanner.log").write_bytes(self.logs)
+        # Filesystem completion intervals help distinguish device/transfer delays
+        # from a slow preview. No image contents or device identifiers are logged.
+        timing = ["page,seconds_since_previous_page"]
+        previous = None
+        for name in sorted(self.seen):
+            timestamp = (self.job / name).stat().st_mtime
+            interval = "" if previous is None else f"{timestamp - previous:.3f}"
+            timing.append(f"{name},{interval}")
+            previous = timestamp
+        (self.job / "timing.csv").write_text("\n".join(timing) + "\n")
         self.project.data["pending"] = None
         clean = not self.stopped and code in (0, 7)
         if (
@@ -1122,9 +1272,12 @@ class SimpleWindow(QMainWindow):
             and clean
             and self.source.currentIndex() == 0
             and self.project.data["sheets"]
+            and not self.project.missing("front")
         ):
             self.project.data["phase"] = (
-                "backs" if self.project.data["duplex"] else "ready"
+                "backs"
+                if self.project.data["duplex"] and self.project.missing("back")
+                else "ready"
             )
         if (
             self.run["side"] == "back"
@@ -1185,24 +1338,7 @@ class SimpleWindow(QMainWindow):
         self.tabs.setCurrentIndex(0 if self.project.data["phase"] == "ready" else 1)
 
     def restart_backs(self):
-        if (
-            QMessageBox.question(
-                self,
-                "Scan the whole back pass again?",
-                "Reload ALL backs, with the last sheet first. Existing originals stay saved; the new pass will replace the pairing.",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            != QMessageBox.Yes
-        ):
-            return
-        self.project.data["delete_history"] = []
-        for s in self.project.data["sheets"]:
-            s["back"] = None
-        self.project.data["extra_backs"] = []
-        self.project.data["phase"] = "backs"
-        self.project.save()
-        self.refresh()
+        self.select_pass("back", restart=True)
 
     def export_pdf(self, preview=False):
         if self.busy:

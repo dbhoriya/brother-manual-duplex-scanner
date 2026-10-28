@@ -13,6 +13,91 @@ from model import Project
 
 
 class AuditTests(test_simple.SimpleTests):
+    def test_live_gallery_appends_without_rebuilding_existing_items(self):
+        self.run_scan([10, 30])
+        self.w.tabs.setCurrentIndex(1)
+        first = self.w.gallery.item(0)
+        self.project.data["sheets"].append(dict(self.project.data["sheets"][0]))
+        self.w.scanning = True
+        try:
+            self.w.refresh_gallery()
+            self.assertIs(self.w.gallery.item(0), first)
+            self.assertEqual(self.w.gallery.count(), 3)
+        finally:
+            self.w.scanning = False
+
+    def test_redo_fronts_preserves_backs_and_can_repeat(self):
+        self.run_scan([10, 30, 50, 70])
+        self.run_scan([80, 60, 40, 20])
+        backs = [s["back"]["path"] for s in self.project.data["sheets"]]
+        originals = [s["front"]["path"] for s in self.project.data["sheets"]]
+        for values in ([11, 31, 51, 71], [12, 32, 52, 72]):
+            with patch("simple.QMessageBox.question", return_value=QMessageBox.Yes):
+                self.w.select_pass("front", True)
+            self.run_scan(values)
+            self.assertEqual(len(self.project.data["sheets"]), 4)
+            self.assertEqual(
+                [s["back"]["path"] for s in self.project.data["sheets"]], backs
+            )
+            self.assertTrue(self.w.export_btn.isEnabled())
+        self.assertTrue(all(Path(p).exists() for p in originals))
+
+    def test_switch_partial_front_redo_to_backs_and_resume(self):
+        self.run_scan([10, 30, 50])
+        self.run_scan([60, 40, 20])
+        with patch("simple.QMessageBox.question", return_value=QMessageBox.Yes):
+            self.w.select_pass("front", True)
+        self.run_scan([11])
+        self.assertFalse(self.w.export_btn.isEnabled())
+        with patch("simple.QMessageBox.question", return_value=QMessageBox.Yes):
+            self.w.select_pass("back", True)
+        self.run_scan([61, 41, 21])
+        self.w.select_pass("front")
+        self.run_scan([31, 51])
+        self.assertTrue(self.w.export_btn.isEnabled())
+        self.assertEqual(len(self.project.data["sheets"]), 3)
+
+    def test_move_fronts_and_backs_independently_and_undo(self):
+        self.run_scan([10, 30, 50, 70])
+        self.run_scan([80, 60, 40, 20])
+        for tab, side, other in [(1, "front", "back"), (2, "back", "front")]:
+            before = [s[side] for s in self.project.data["sheets"]]
+            opposite = [s[other] for s in self.project.data["sheets"]]
+            self.w.tabs.setCurrentIndex(tab)
+            self.w.gallery.setCurrentRow(1)
+            with patch("simple.QInputDialog.getInt", return_value=(4, True)):
+                self.w.move_selected()
+            self.assertEqual(
+                [s[side] for s in self.project.data["sheets"]],
+                [before[0], before[2], before[3], before[1]],
+            )
+            self.assertEqual([s[other] for s in self.project.data["sheets"]], opposite)
+            self.w.undo_delete()
+            self.assertEqual([s[side] for s in self.project.data["sheets"]], before)
+
+    def test_front_recovery_fills_existing_slots(self):
+        self.run_scan([10, 30])
+        self.run_scan([40, 20])
+        with patch("simple.QMessageBox.question", return_value=QMessageBox.Yes):
+            self.w.select_pass("front", True)
+        folder = self.project.path / "interrupted"
+        folder.mkdir()
+        Image.new("L", (20, 20), 99).save(folder / "page-0001.pnm")
+        self.project.data["pending"] = dict(
+            whole_stack=True,
+            folder="interrupted",
+            side="front",
+            start=2,
+            targets=[0, 1],
+            dpi=100,
+        )
+        self.project.save()
+        recovered = Project.load(self.project.path)
+        self.assertEqual(len(recovered.data["sheets"]), 2)
+        self.assertTrue(recovered.data["sheets"][0]["front"])
+        self.assertTrue(recovered.data["sheets"][0]["back"])
+        self.assertIsNone(recovered.data["sheets"][1]["front"])
+
     def test_export_keeps_prior_color_when_capture_changes_to_gray(self):
         self.w.choose_mode(False)
         self.run_scan([10])

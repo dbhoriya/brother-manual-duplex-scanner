@@ -153,7 +153,12 @@ class Project:
                     continue
                 page = {"path": str(path), "dpi": pending["dpi"], "rotation": 0}
                 if pending["side"] == "front":
-                    sheet = pending["start"] + index
+                    targets = pending.get("targets", [])
+                    sheet = (
+                        targets[index]
+                        if index < len(targets)
+                        else pending["start"] + index - len(targets)
+                    )
                     while len(self.data["sheets"]) <= sheet:
                         self.data["sheets"].append({"front": None, "back": None})
                     self.data["sheets"][sheet]["front"] = page

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Continue or redo either scan pass, retaining the opposite side and original files.
+- Move individual fronts or backs to a new position, with Undo.
+- Recover interrupted front replacements into their original sheet positions.
+- Append live gallery items during capture, bound thumbnail/log caches, and batch saves.
+- Save per-pass file completion intervals for investigating long-batch slowdowns.
+
+## Initial public release
+
 First public source package:
 
 - Whole-stack single-sided and manual duplex scanning for Brother/SANE scanners.

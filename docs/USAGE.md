@@ -19,11 +19,24 @@ Keep blank backs. Thumbnail selection controls preview/editing only; scanning al
 | Delete selected pages | Delete key or Delete selected |
 | Clear the document | Clear all; confirmation required |
 | Undo an edit | Undo or Ctrl+Z in the gallery |
+| Move a page within one side | Fronts or Backs → select one page → Move to… |
 | Rotate | Rotate |
 | Crop one/all pages | Crop → drag to keep area → choose scope |
 | Preview actual PDF | Preview PDF; opens system viewer |
 
 Delete and crop preserve original images. Cropping all uses the same proportional rectangle on every included page. Full page removes the crop when applied. Starting another scan resets the prior edit-undo history.
+
+## Redo or continue either side
+
+Open **Scan options** at any time when scanning is stopped:
+
+- **Continue / add fronts:** fill missing front positions, then append any additional sheets.
+- **Continue backs:** fill missing backs, last sheet first.
+- **Redo all fronts… / Redo all backs…:** replace that side while keeping the opposite side and all original files. Load the same whole stack, then press Scan.
+
+You can repeat these actions as often as needed. If a replacement pass stops early, continue with only its remaining sheets. Counts must match before exporting duplex. If the physical stack has changed, redo both sides so sheet positions agree. A shorter replacement pass leaves missing positions rather than silently dropping opposite-side pages.
+
+To correct order, open **Fronts** or **Backs**, select one page, and choose **Move to…**. Moving position 2 to 4 shifts positions 3 and 4 forward. The opposite side stays fixed. Positions are the visible order in that tab, not the acquisition order of the back pass. Check **Combined PDF** before saving. **Undo** restores the move.
 
 ## Paper sizes
 
